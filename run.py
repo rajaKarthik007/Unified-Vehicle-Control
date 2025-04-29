@@ -405,7 +405,8 @@ if __name__ == '__main__':
     ALG = args.alg
 
     # device
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    device = torch.device( "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    
     print(f"Using device: {device}")
 
     if args.validate:
@@ -463,8 +464,9 @@ if __name__ == '__main__':
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
             n_epochs = 500
-            batch_size = 32
+            batch_size = 16
             horizon = 1000
+            
 
             for epoch in tqdm(range(n_epochs), desc="Training Progress", ncols=100):
                 seeds = np.random.randint(0, 100000, size=batch_size)
@@ -519,6 +521,146 @@ if __name__ == '__main__':
                     save_path = Path(c.res) / f"trained_policy_epoch_{ALG}_{epoch+1}.pth"
                     torch.save(model.state_dict(), save_path)
                     print(f"Model saved to: {save_path} epoch: {epoch+1}")
+                    
+        elif ALG == "TRPO":
+            env = MySingleRingEnv(c)  # Only to get obs_dim and action_dim
+            obs_dim = env.c._n_obs
+            action_dim = env.c.n_actions
+            del env
+
+            model = PolicyNetwork(obs_dim, action_dim).to(device)
+            n_epochs = 500
+            batch_size = 16
+            horizon = 1000
+            max_kl = 0.01
+            cg_damping = 0.1
+            cg_iters = 10
+
+            from torch.nn.utils import parameters_to_vector, vector_to_parameters
+
+            def conjugate_gradients(fvp_fn, b, nsteps):
+                x = torch.zeros_like(b)
+                r = b.clone()
+                p = b.clone()
+                rdotr = torch.dot(r, r)
+                for _ in range(nsteps):
+                    _Avp = fvp_fn(p)
+                    alpha = rdotr / (torch.dot(p, _Avp) + 1e-8)
+                    x += alpha * p
+                    r -= alpha * _Avp
+                    new_rdotr = torch.dot(r, r)
+                    if new_rdotr < 1e-10:
+                        break
+                    beta = new_rdotr / rdotr
+                    p = r + beta * p
+                    rdotr = new_rdotr
+                return x
+            losses = []
+
+            for epoch in tqdm(range(n_epochs), desc="Training Progress", ncols=100):
+                seeds = np.random.randint(0, 100000, size=batch_size)
+                model_params = model.cpu().state_dict()
+                model.to(device)
+
+                with mp.Pool(processes=batch_size) as pool:
+                    results = pool.starmap(
+                        collect_rollout_worker,
+                        [(model_params, c, seeds[i], horizon) for i in range(batch_size)]
+                    )
+
+                batch_obs = []
+                batch_actions = []
+                batch_rewards = []
+
+                for obs_arr, actions_arr, rewards_arr, _ in results:
+                    batch_obs.append(obs_arr)
+                    batch_actions.append(actions_arr)
+                    batch_rewards.append(rewards_arr)
+
+                batch_obs = np.concatenate(batch_obs)
+                batch_actions = np.concatenate(batch_actions)
+                batch_rewards = np.concatenate(batch_rewards)
+
+                # Compute returns (reward-to-go)
+                returns = []
+                G = 0
+                gamma = c.gamma
+                for r in reversed(batch_rewards):
+                    G = r + gamma * G
+                    returns.insert(0, G)
+                returns = torch.tensor(returns, dtype=torch.float32).to(device)
+                returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+                obs = torch.tensor(batch_obs, dtype=torch.float32).to(device)
+                actions = torch.tensor(batch_actions, dtype=torch.int64).to(device)
+
+                logits = model(obs)
+                dist = torch.distributions.Categorical(logits)
+                old_log_probs = dist.log_prob(actions).detach()
+
+                def surrogate_loss():
+                    logits_new = model(obs)
+                    dist_new = torch.distributions.Categorical(logits_new)
+                    log_probs_new = dist_new.log_prob(actions)
+                    ratio = torch.exp(log_probs_new - old_log_probs)
+                    return (ratio * returns).mean()
+
+                loss = -surrogate_loss()
+
+                params = list(model.parameters())
+                flat_params = parameters_to_vector(params)
+
+                grad_loss = torch.autograd.grad(loss, params)
+                grad_loss = torch.cat([g.contiguous().view(-1) for g in grad_loss]).detach()
+
+                def Fvp(v):
+                    logits_new = model(obs)
+                    dist_new = torch.distributions.Categorical(logits_new)
+                    kl = torch.distributions.kl_divergence(dist, dist_new).mean()
+                    grad_kl = torch.autograd.grad(kl, params, create_graph=True, retain_graph=True)
+                    flat_grad_kl = torch.cat([g.contiguous().view(-1) for g in grad_kl])
+                    kl_v = (flat_grad_kl * v).sum()
+                    hvp = torch.autograd.grad(kl_v, params, retain_graph=True)
+                    flat_hvp = torch.cat([g.contiguous().view(-1) for g in hvp]).detach()
+                    return flat_hvp + cg_damping * v
+
+                step_dir = conjugate_gradients(Fvp, -grad_loss, cg_iters)
+                shs = 0.5 * (step_dir * Fvp(step_dir)).sum(0, keepdim=True)
+                step_size = torch.sqrt(2 * max_kl / (shs + 1e-8))
+                full_step = step_dir * step_size
+
+                expected_improve = -(grad_loss * step_dir).sum(0, keepdim=True)
+
+                def set_and_eval(step):
+                    vector_to_parameters(flat_params + step, model.parameters())
+                    return surrogate_loss()
+
+                old_surrogate = surrogate_loss()
+                success = False
+                for fraction in [.5 ** i for i in range(10)]:
+                    new_surrogate = set_and_eval(fraction * full_step)
+                    actual_improve = new_surrogate - old_surrogate
+                    if actual_improve > 0:
+                        success = True
+                        break
+                if not success:
+                    vector_to_parameters(flat_params, model.parameters())
+
+                avg_reward = np.mean(batch_rewards)
+                final_surrogate = surrogate_loss().item()
+
+                losses.append(final_surrogate)
+
+                tqdm.write(f"Epoch {epoch+1} | Loss (Surrogate): {final_surrogate:.6f} | Avg Reward: {avg_reward:.4f}")
+
+                if (epoch+1) % 100 == 0:
+                    save_path = Path(c.res) / f"trained_policy_epoch_{ALG}_{epoch+1}.pth"
+                    torch.save(model.state_dict(), save_path)
+                    print(f"Model saved to: {save_path} epoch: {epoch+1}")
+        
+        
+        
+        
         else:
             print(f"Invalid algorithm: {ALG}")
             exit()
