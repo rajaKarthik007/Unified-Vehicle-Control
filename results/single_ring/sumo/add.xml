@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<additional xmlns:xsi="F/resources/xml/XMLSchema-instance" xsi:noNamespaceSchemaLocation="/Users/rajakarthikvobugari/Documents/RL_ECEN743/project/single_ring/automatic_vehicular_control/resources/xml/additional_file.xsd">
+<additional xmlns:xsi="F/resources/xml/XMLSchema-instance" xsi:noNamespaceSchemaLocation="automatic_vehicular_control/automatic_vehicular_control/resources/xml/additional_file.xsd">
   <vType id="human" accel="1" decel="1.5" minGap="2" sigma="0.2" carFollowModel="IDM" laneChangeModel="LC2013"/>
   <vType id="rl" accel="1" decel="1.5" minGap="2" sigma="0" carFollowModel="IDM" laneChangeModel="LC2013"/>
   <route id="route0" edges="right left right"/>
