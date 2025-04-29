@@ -1,5 +1,0 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<viewsettings xmlns:xsi="F/resources/xml/XMLSchema-instance" xsi:noNamespaceSchemaLocation="/Users/rajakarthikvobugari/Documents/RL_ECEN743/project/single_ring/automatic_vehicular_control/resources/xml/viewsettings_file.xsd">
-  <scheme name="real world"/>
-  <background backgroundColor="150,150,150" showGrid="0" gridXSize="100.00" gridYSize="100.00"/>
-</viewsettings>

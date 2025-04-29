@@ -1,5 +1,0 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<connections xmlns:xsi="F/resources/xml/XMLSchema-instance" xsi:noNamespaceSchemaLocation="automatic_vehicular_control/automatic_vehicular_control/resources/xml/connections_file.xsd">
-  <connection from="left" to="right" fromLane="0" toLane="0"/>
-  <connection from="right" to="left" fromLane="0" toLane="0"/>
-</connections>
