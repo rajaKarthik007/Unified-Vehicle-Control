@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on Mon Apr 28 21:07:49 2025 by Eclipse SUMO netconvert Version 1.1.0
-<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+<!-- generated on 2025-04-29 11:21:50 by Eclipse SUMO netconvert Version v1_22_0+1649-1f99e2eee0c
+<netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
         <node-files value="results/single_ring/sumo/nod.xml"/>
@@ -17,10 +17,10 @@
         <no-turnarounds value="true"/>
     </junctions>
 
-</configuration>
+</netconvertConfiguration>
 -->
 
-<net version="1.1" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+<net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
 
     <location netOffset="39.78,39.79" convBoundary="0.00,0.00,79.56,79.58" origBoundary="-39.78,-39.79,39.78,39.79" projParameter="!"/>
 

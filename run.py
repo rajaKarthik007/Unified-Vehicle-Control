@@ -7,6 +7,8 @@ import uuid
 import copy
 import argparse
 import random
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Dummy logger
 def dummy_logger(msg):
@@ -17,7 +19,7 @@ c = Namespace(
     res=Path('results/single_ring'),
     render=False,
     sim_step=0.1,
-    warmup_steps=500,
+    warmup_steps=2000,
     skip_stat_steps=0,
     av_frac=0.5,
     start=True,
@@ -38,18 +40,18 @@ c = Namespace(
     initial_space='free',
     sigma=0.2,
 
-    circ_feature=False,
-    accel_feature=False,
+    circ_feature=True,
+    accel_feature=True,
     act_type='accel_discrete',  # matches your step() usage\
     low=-1,
     high=1,
     norm_action=True,
-    global_reward=True,
-    accel_penalty=0,
+    global_reward=False,
+    accel_penalty=0.15,
     collision_penalty=100,
 
     n_steps=100,
-    gamma=0.9,
+    gamma=0.999,
     alg=None,  # Placeholder (since no PG class defined here)
     norm_reward=True,
     center_reward=True,
@@ -62,7 +64,7 @@ c.log = dummy_logger
 c._n_obs = 3 + int(c.circ_feature) + int(c.accel_feature)
 c.observation_space = gym.spaces.Box(low=np.array([c.low] * c._n_obs), high=np.array([c.high] * c._n_obs), dtype=np.float32)
 
-c.n_actions = 3
+c.n_actions = 7
 if c.act_type in ['accel_discrete', 'discrete']:
     c.action_space = Discrete(c.n_actions)
 elif c.act_type in ['accel', 'discretize', 'continuous']:
@@ -83,7 +85,7 @@ def build_closed_route(edges, n_veh=0, av=0, space='random_free', type_fn=None, 
     vehicles = []
     if n_veh > 0:
         lane_lengths, lane_routes, lane_idxs = map(np.array, zip(*[
-            (float(e.length), r.id, i)  # 👈 cast e.length to float, numLanes to int
+            (float(e.length), r.id, i)  
             for e, r in zip(edge_list, routes)
             for i in range(int(e.numLanes))
         ]))
@@ -304,10 +306,13 @@ class PolicyNetwork(torch.nn.Module):
         x = torch.tanh(self.fc2(x))
         return torch.softmax(self.fc_out(x), dim=-1)
     
-def collect_rollout_worker(model_params, config, seed, horizon):
+def collect_rollout_worker(model_params, config, seed, horizon, worker_idx):
     device = torch.device("cpu")
     
     config = copy.deepcopy(config)  # copy first!
+    
+    base_circumference = 230
+    config.circumference = base_circumference + worker_idx
     
     # ➔ 2. Create a unique folder for this worker
     unique_id = uuid.uuid4().hex[:8]  # random short string
@@ -329,6 +334,8 @@ def collect_rollout_worker(model_params, config, seed, horizon):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
+    warmup_steps = np.random.randint(1500, 3500) 
+    env.c.warmup_steps = warmup_steps
     obs = env.reset()
     obs_list = []
     action_list = []
@@ -391,6 +398,21 @@ def collect_rollout(env, model, horizon=1000):
 
     return rollout
 
+def plot_rewards(avg_rewards, alg_name, n_epochs, save_dir):
+    window_size = 50  # Moving average window size
+    moving_avg = np.convolve(avg_rewards, np.ones(window_size)/window_size, mode='valid')
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(moving_avg)
+    plt.title(f'Moving Avg Rewards - {alg_name.upper()} ({n_epochs} epochs)')
+    plt.xlabel('Epoch')
+    plt.ylabel('Moving Average Reward')
+    plt.grid(True)
+    save_path = save_dir / f"{alg_name}_rewards_plot.png"
+    plt.savefig(save_path)
+    print(f"Reward plot saved to {save_path}")
+    plt.close()
+
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
@@ -400,6 +422,8 @@ if __name__ == '__main__':
     parser.add_argument('--validate', action='store_true', help='Run policy visualization instead of training')
     parser.add_argument('--model_path', type=str, default=None, help='Path to the trained model weights')
     parser.add_argument('--alg', type=str, default='baseline', help='Algorithm to use (e.g., baseline)')
+    parser.add_argument('--n_epochs', type=int, default=500)
+    parser.add_argument('--batch_size', type=int, default=32)
     args = parser.parse_args()
 
     ALG = args.alg
@@ -410,47 +434,43 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     if args.validate:
-        # === Evaluation Mode ===
-        if ALG == "baseline":
-            c.render = True  # Force SUMO-GUI
-            c.start = True   # Start SUMO immediately
-            c.sim_step = 0.5
+        c.render = True  # Force SUMO-GUI
+        c.start = True   # Start SUMO immediately
+        c.sim_step = 0.5
 
-            env = MySingleRingEnv(c)
-            model = PolicyNetwork(env.c._n_obs, env.c.n_actions).to(device)
+        env = MySingleRingEnv(c)
+        model = PolicyNetwork(env.c._n_obs, env.c.n_actions).to(device)
 
-            if args.model_path is None:
-                raise ValueError("Model path must be provided with --model_path when --validate is set.")
+        if args.model_path is None:
+            raise ValueError("Model path must be provided with --model_path when --validate is set.")
 
-            model.load_state_dict(torch.load(args.model_path, map_location=device))
-            model.eval()
+        model.load_state_dict(torch.load(args.model_path, map_location=device))
+        model.eval()
 
-            obs = env.reset()
+        obs = env.reset()
 
-            # Warmup: random steps between 900 to 1100
-            warmup_steps = random.randint(900, 1100)
-            print(f"Warmup for {warmup_steps} steps...")
-            for _ in range(warmup_steps):
-                env.step()  # no action given = random/default
+        # Warmup: random steps between 900 to 1100
+        warmup_steps = random.randint(900, 1100)
+        print(f"Warmup for {warmup_steps} steps...")
+        for _ in range(warmup_steps):
+            env.step()  # no action given = random/default
 
-            print("Starting policy control...")
-            for step in range(1000):
-                obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
-                with torch.no_grad():
-                    action_tensor = model(obs_tensor)
-                dist = torch.distributions.Categorical(action_tensor)
-                action = dist.sample()
+        print("Starting policy control...")
+        for step in range(5000):
+            obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
+            with torch.no_grad():
+                action_tensor = model(obs_tensor)
+            dist = torch.distributions.Categorical(action_tensor)
+            action = dist.sample()
 
-                obs, reward, done, info = env.step(action.item())
-                import time
-                time.sleep(0.05)  # slow down a bit for visualization
-                if done:
-                    break
+            obs, reward, done, info = env.step(action.item())
+            import time
+            time.sleep(0.05)  # slow down a bit for visualization
+            if done:
+                break
 
-            env.close()
-        else:
-            print(f"Invalid algorithm: {ALG}")
-            exit()
+        env.close()
+        
 
     else:
         # === Training Mode ===
@@ -463,11 +483,11 @@ if __name__ == '__main__':
             model = PolicyNetwork(obs_dim, action_dim).to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-            n_epochs = 500
-            batch_size = 16
-            horizon = 1000
+            n_epochs = args.n_epochs
+            batch_size = args.batch_size
+            horizon = 5000
             
-
+            avg_rewards_list = []
             for epoch in tqdm(range(n_epochs), desc="Training Progress", ncols=100):
                 seeds = np.random.randint(0, 100000, size=batch_size)
                 model_params = model.cpu().state_dict()  # very important: send model on CPU
@@ -476,7 +496,7 @@ if __name__ == '__main__':
                 with mp.Pool(processes=batch_size) as pool:
                     results = pool.starmap(
                         collect_rollout_worker,
-                        [(model_params, c, seeds[i], horizon) for i in range(batch_size)]
+                        [(model_params, c, seeds[i], horizon, i) for i in range(batch_size)]
                     )
 
                 batch_obs = []
@@ -515,12 +535,15 @@ if __name__ == '__main__':
                 optimizer.step()
 
                 avg_reward = np.mean(batch_rewards)
+                avg_rewards_list.append(avg_reward)
                 tqdm.write(f"Epoch {epoch+1} | Loss: {loss.item():.4f} | Avg Reward: {avg_reward:.4f}")
 
                 if (epoch+1) % 100 == 0:
                     save_path = Path(c.res) / f"trained_policy_epoch_{ALG}_{epoch+1}.pth"
                     torch.save(model.state_dict(), save_path)
                     print(f"Model saved to: {save_path} epoch: {epoch+1}")
+                
+            plot_rewards(avg_rewards_list, ALG, n_epochs, Path(c.res))
                     
         elif ALG == "TRPO":
             env = MySingleRingEnv(c)  # Only to get obs_dim and action_dim
@@ -529,12 +552,12 @@ if __name__ == '__main__':
             del env
 
             model = PolicyNetwork(obs_dim, action_dim).to(device)
-            n_epochs = 500
-            batch_size = 16
-            horizon = 1000
+            n_epochs = args.n_epochs
+            batch_size = args.batch_size
+            horizon = 5000
             max_kl = 0.01
             cg_damping = 0.1
-            cg_iters = 10
+            cg_iters = 20
 
             from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
@@ -557,6 +580,7 @@ if __name__ == '__main__':
                 return x
             losses = []
 
+            avg_rewards_list = []
             for epoch in tqdm(range(n_epochs), desc="Training Progress", ncols=100):
                 seeds = np.random.randint(0, 100000, size=batch_size)
                 model_params = model.cpu().state_dict()
@@ -565,8 +589,8 @@ if __name__ == '__main__':
                 with mp.Pool(processes=batch_size) as pool:
                     results = pool.starmap(
                         collect_rollout_worker,
-                        [(model_params, c, seeds[i], horizon) for i in range(batch_size)]
-                    )
+                        [(model_params, c, seeds[i], horizon, i) for i in range(batch_size)]
+                    )       
 
                 batch_obs = []
                 batch_actions = []
@@ -647,6 +671,7 @@ if __name__ == '__main__':
                     vector_to_parameters(flat_params, model.parameters())
 
                 avg_reward = np.mean(batch_rewards)
+                avg_rewards_list.append(avg_reward)
                 final_surrogate = surrogate_loss().item()
 
                 losses.append(final_surrogate)
@@ -658,7 +683,7 @@ if __name__ == '__main__':
                     torch.save(model.state_dict(), save_path)
                     print(f"Model saved to: {save_path} epoch: {epoch+1}")
         
-        
+            plot_rewards(avg_rewards_list, ALG, n_epochs, Path(c.res))
         
         
         else:

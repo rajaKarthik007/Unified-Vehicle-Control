@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <nodes xmlns:xsi="F/resources/xml/XMLSchema-instance" xsi:noNamespaceSchemaLocation="/Users/rajakarthikvobugari/Documents/RL_ECEN743/project/single_ring/automatic_vehicular_control/resources/xml/nodes_file.xsd">
-  <node id="bottom" x="0" y="-39.78873577297384"/>
-  <node id="top" x="0" y="39.78873577297384"/>
+  <node id="bottom" x="0" y="-36.60563691113593"/>
+  <node id="top" x="0" y="36.60563691113593"/>
 </nodes>
